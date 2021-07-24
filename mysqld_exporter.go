@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/prometheus/mysqld_exporter/push"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -238,7 +239,81 @@ func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger 
 	}
 }
 
+func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
+	// landingPage contains the HTML served at '/'.
+	// TODO: Make this nicer and more informative.
+	var landingPage = []byte(`<html>
+<head><title>MySQLd exporter</title></head>
+<body>
+<h1>MySQLd exporter</h1>
+<p><a href='` + *metricPath + `'>Metrics</a></p>
+</body>
+</html>
+`)
+
+	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
+	level.Info(logger).Log("msg", "Build context", version.BuildContext())
+
+	dsn = os.Getenv("DATA_SOURCE_NAME")
+	if len(dsn) == 0 {
+		var err error
+		if dsn, err = parseMycnf(*configMycnf); err != nil {
+			level.Info(logger).Log("msg", "Error parsing my.cnf", "file", *configMycnf, "err", err)
+			os.Exit(1)
+		}
+	}
+
+	// Register only scrapers enabled by flag.
+
+	handlerFunc := newHandler(collector.NewMetrics(), *enabledScrapers, logger)
+	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(landingPage)
+	})
+
+	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
+	srv := &http.Server{Addr: *listenAddress}
+	if err := web.ListenAndServe(srv, *webConfig, logger); err != nil {
+		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
+		os.Exit(1)
+	}
+}
+
+func pushData(hostname, env string, enabledScrapers *[]collector.Scraper, prometheusEndpoints []string, logger log.Logger) {
+	if len(prometheusEndpoints) == 0 {
+		level.Error(logger).Log("msg", "No given prometheus endpoint")
+		os.Exit(1)
+	}
+
+	filteredScrapers := *enabledScrapers
+	everyReportTime := int64(time.Second * 10)
+
+	time.Sleep(time.Duration(time.Now().UnixNano() - time.Now().UnixNano()/everyReportTime*everyReportTime))
+
+	for range time.NewTicker(time.Duration(everyReportTime)).C {
+		level.Info(logger).Log("msg", "start export data")
+
+		registry := prometheus.NewRegistry()
+		registry.MustRegister(collector.New(context.Background(), dsn, collector.NewMetrics(), filteredScrapers, logger))
+
+		gatherers := prometheus.Gatherers{
+			prometheus.DefaultGatherer,
+			registry,
+		}
+
+		// vm need user POST function
+		for _, endpoint := range prometheusEndpoints {
+			fullUrl := fmt.Sprintf("%s/extra_label=instance=%s&env=%s", endpoint, hostname, env)
+			err := push.New(fullUrl, "").Gatherer(gatherers).Add()
+			if err != nil {
+				level.Info(logger).Log("msg", "put mysqld_exporter failed", "endpoint", endpoint, "err", err)
+			}
+		}
+	}
+}
+
 func main() {
+
 	// Generate ON/OFF flags for all scrapers.
 	scraperFlags := map[collector.Scraper]*bool{}
 	for scraper, enabledByDefault := range scrapers {
@@ -260,33 +335,15 @@ func main() {
 	flag.AddFlags(kingpin.CommandLine, promlogConfig)
 	kingpin.Version(version.Print("mysqld_exporter"))
 	kingpin.HelpFlag.Short('h')
+
+	reportMod := kingpin.Flag("report-mod", "will auto push data to prometheus").Default("false").Bool()
+	reportEndpointsP := kingpin.Flag("report-endpoints", "push data endpoint, split by ;").Default("").String()
+	hostnameP := kingpin.Flag("hostname", "report hostname").Default("").String()
+	env := kingpin.Flag("env", "mysql environment").Default("").String()
+
 	kingpin.Parse()
 	logger := promlog.New(promlogConfig)
 
-	// landingPage contains the HTML served at '/'.
-	// TODO: Make this nicer and more informative.
-	var landingPage = []byte(`<html>
-<head><title>MySQLd exporter</title></head>
-<body>
-<h1>MySQLd exporter</h1>
-<p><a href='` + *metricPath + `'>Metrics</a></p>
-</body>
-</html>
-`)
-
-	level.Info(logger).Log("msg", "Starting msqyld_exporter", "version", version.Info())
-	level.Info(logger).Log("msg", "Build context", version.BuildContext())
-
-	dsn = os.Getenv("DATA_SOURCE_NAME")
-	if len(dsn) == 0 {
-		var err error
-		if dsn, err = parseMycnf(*configMycnf); err != nil {
-			level.Info(logger).Log("msg", "Error parsing my.cnf", "file", *configMycnf, "err", err)
-			os.Exit(1)
-		}
-	}
-
-	// Register only scrapers enabled by flag.
 	enabledScrapers := []collector.Scraper{}
 	for scraper, enabled := range scraperFlags {
 		if *enabled {
@@ -294,16 +351,19 @@ func main() {
 			enabledScrapers = append(enabledScrapers, scraper)
 		}
 	}
-	handlerFunc := newHandler(collector.NewMetrics(), enabledScrapers, logger)
-	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write(landingPage)
-	})
 
-	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
-	srv := &http.Server{Addr: *listenAddress}
-	if err := web.ListenAndServe(srv, *webConfig, logger); err != nil {
-		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
-		os.Exit(1)
+	if *reportMod {
+		hostname := *hostnameP
+		if hostname == "" {
+			var err error
+			hostname, err = os.Hostname()
+			if err != nil {
+				level.Error(logger).Log("msg", "get hostname failed", "err", err)
+				os.Exit(1)
+			}
+		}
+		pushData(hostname, *env, &enabledScrapers, strings.Split(*reportEndpointsP, ";"), logger)
+	} else {
+		httpServer(&enabledScrapers, logger)
 	}
 }
