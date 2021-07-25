@@ -42,10 +42,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/golang/snappy"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -258,7 +258,11 @@ func (p *Pusher) push(method string) error {
 		}
 		enc.Encode(mf)
 	}
-	req, err := http.NewRequest(method, p.fullURL(), buf)
+
+	snappyBuf := &bytes.Buffer{}
+	snappyBuf.Write(snappy.Encode(nil, buf.Bytes()))
+
+	req, err := http.NewRequest(method, p.fullURL(), snappyBuf)
 	if err != nil {
 		return err
 	}
