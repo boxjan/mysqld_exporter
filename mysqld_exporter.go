@@ -291,7 +291,7 @@ func pushData(hostname, env string, enabledScrapers *[]collector.Scraper, promet
 
 		// vm need user POST function
 		for _, endpoint := range prometheusEndpoints {
-			fullUrl := fmt.Sprintf("%s/extra_label=instance=%s&env=%s", endpoint, hostname, env)
+			fullUrl := fmt.Sprintf("%s/?extra_label=instance=%s&extra_label=env=%s", endpoint, hostname, env)
 			err := push.New(fullUrl, "mysql").Gatherer(gatherers).Add()
 			if err != nil {
 				level.Info(logger).Log("msg", "put mysqld_exporter failed", "endpoint", endpoint, "err", err)
