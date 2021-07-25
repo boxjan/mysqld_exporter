@@ -251,9 +251,6 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 </html>
 `)
 
-	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
-	level.Info(logger).Log("msg", "Build context", version.BuildContext())
-
 	dsn = os.Getenv("DATA_SOURCE_NAME")
 	if len(dsn) == 0 {
 		var err error
@@ -343,6 +340,9 @@ func main() {
 
 	kingpin.Parse()
 	logger := promlog.New(promlogConfig)
+
+	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
+	level.Info(logger).Log("msg", "Build context", version.BuildContext())
 
 	enabledScrapers := []collector.Scraper{}
 	for scraper, enabled := range scraperFlags {
