@@ -251,15 +251,6 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 </html>
 `)
 
-	dsn = os.Getenv("DATA_SOURCE_NAME")
-	if len(dsn) == 0 {
-		var err error
-		if dsn, err = parseMycnf(*configMycnf); err != nil {
-			level.Info(logger).Log("msg", "Error parsing my.cnf", "file", *configMycnf, "err", err)
-			os.Exit(1)
-		}
-	}
-
 	// Register only scrapers enabled by flag.
 
 	handlerFunc := newHandler(collector.NewMetrics(), *enabledScrapers, logger)
@@ -349,6 +340,15 @@ func main() {
 		if *enabled {
 			level.Info(logger).Log("msg", "Scraper enabled", "scraper", scraper.Name())
 			enabledScrapers = append(enabledScrapers, scraper)
+		}
+	}
+
+	dsn = os.Getenv("DATA_SOURCE_NAME")
+	if len(dsn) == 0 {
+		var err error
+		if dsn, err = parseMycnf(*configMycnf); err != nil {
+			level.Info(logger).Log("msg", "Error parsing my.cnf", "file", *configMycnf, "err", err)
+			os.Exit(1)
 		}
 	}
 

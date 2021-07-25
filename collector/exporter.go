@@ -131,6 +131,7 @@ func (e *Exporter) scrape(ctx context.Context, ch chan<- prometheus.Metric) {
 	var err error
 
 	scrapeTime := time.Now()
+	level.Info(e.logger).Log("dsn", e.dsn)
 	db, err := sql.Open("mysql", e.dsn)
 	if err != nil {
 		level.Error(e.logger).Log("msg", "Error opening connection to database", "err", err)
