@@ -18,7 +18,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/prometheus/mysqld_exporter/push"
+	"github.com/boxjan/prometheus-remote-write/exporter-pusher"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -27,8 +27,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/go-sql-driver/mysql"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -44,7 +44,7 @@ import (
 )
 
 var (
-	webConfig     = webflag.AddFlags(kingpin.CommandLine)
+	toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9104")
 	listenAddress = kingpin.Flag(
 		"web.listen-address",
 		"Address to listen on for web interface and telemetry.",
@@ -104,6 +104,25 @@ var scrapers = map[collector.Scraper]bool{
 	collector.ScrapeHeartbeat{}:                           false,
 	collector.ScrapeSlaveHosts{}:                          false,
 	collector.ScrapeReplicaHost{}:                         false,
+}
+
+func filterScrapers(scrapers []collector.Scraper, collectParams []string) []collector.Scraper {
+	filteredScrapers := scrapers
+
+	// Check if we have some "collect[]" query parameters.
+	if len(collectParams) > 0 {
+		filters := make(map[string]bool)
+		for _, param := range collectParams {
+			filters[param] = true
+		}
+
+		for _, scraper := range scrapers {
+			if filters[scraper.Name()] {
+				filteredScrapers = append(filteredScrapers, scraper)
+			}
+		}
+	}
+	return filteredScrapers
 }
 
 func parseMycnf(config interface{}) (string, error) {
@@ -184,7 +203,6 @@ func init() {
 
 func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		filteredScrapers := scrapers
 		params := r.URL.Query()["collect[]"]
 		// Use request context for cancellation when connection gets closed.
 		ctx := r.Context()
@@ -209,24 +227,11 @@ func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger 
 				r = r.WithContext(ctx)
 			}
 		}
-		level.Debug(logger).Log("msg", "collect[] params", "params", strings.Join(params, ","))
 
-		// Check if we have some "collect[]" query parameters.
-		if len(params) > 0 {
-			filters := make(map[string]bool)
-			for _, param := range params {
-				filters[param] = true
-			}
-
-			filteredScrapers = nil
-			for _, scraper := range scrapers {
-				if filters[scraper.Name()] {
-					filteredScrapers = append(filteredScrapers, scraper)
-				}
-			}
-		}
+		filteredScrapers := filterScrapers(scrapers, collect)
 
 		registry := prometheus.NewRegistry()
+
 		registry.MustRegister(collector.New(ctx, dsn, metrics, filteredScrapers, logger))
 
 		gatherers := prometheus.Gatherers{
@@ -261,47 +266,13 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 
 	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
 	srv := &http.Server{Addr: *listenAddress}
-	if err := web.ListenAndServe(srv, *webConfig, logger); err != nil {
+	if err := web.ListenAndServe(srv, *toolkitFlags, logger); err != nil {
 		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
 		os.Exit(1)
 	}
 }
 
-func pushData(hostname, env string, enabledScrapers *[]collector.Scraper, prometheusEndpoints []string, logger log.Logger) {
-	if len(prometheusEndpoints) == 0 {
-		level.Error(logger).Log("msg", "No given prometheus endpoint")
-		os.Exit(1)
-	}
-
-	filteredScrapers := *enabledScrapers
-	everyReportTime := int64(time.Second * 10)
-
-	time.Sleep(time.Duration(time.Now().UnixNano() - time.Now().UnixNano()/everyReportTime*everyReportTime))
-
-	for range time.NewTicker(time.Duration(everyReportTime)).C {
-		level.Info(logger).Log("msg", "start export data")
-
-		registry := prometheus.NewRegistry()
-		registry.MustRegister(collector.New(context.Background(), dsn, collector.NewMetrics(), filteredScrapers, logger))
-
-		gatherers := prometheus.Gatherers{
-			prometheus.DefaultGatherer,
-			registry,
-		}
-
-		// vm need user POST function
-		for _, endpoint := range prometheusEndpoints {
-			fullUrl := fmt.Sprintf("%s/?extra_label=instance=%s&extra_label=env=%s", endpoint, hostname, env)
-			err := push.New(fullUrl, "mysql").Gatherer(gatherers).Add()
-			if err != nil {
-				level.Info(logger).Log("msg", "put mysqld_exporter failed", "endpoint", endpoint, "err", err)
-			}
-		}
-	}
-}
-
 func main() {
-
 	// Generate ON/OFF flags for all scrapers.
 	scraperFlags := map[collector.Scraper]*bool{}
 	for scraper, enabledByDefault := range scrapers {
@@ -323,25 +294,11 @@ func main() {
 	flag.AddFlags(kingpin.CommandLine, promlogConfig)
 	kingpin.Version(version.Print("mysqld_exporter"))
 	kingpin.HelpFlag.Short('h')
-
-	reportMod := kingpin.Flag("report-mod", "will auto push data to prometheus").Default("false").Bool()
-	reportEndpointsP := kingpin.Flag("report-endpoints", "push data endpoint, split by ;").Default("").String()
-	hostnameP := kingpin.Flag("hostname", "report hostname").Default("").String()
-	env := kingpin.Flag("env", "mysql environment").Default("").String()
-
 	kingpin.Parse()
 	logger := promlog.New(promlogConfig)
 
 	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
 	level.Info(logger).Log("msg", "Build context", version.BuildContext())
-
-	enabledScrapers := []collector.Scraper{}
-	for scraper, enabled := range scraperFlags {
-		if *enabled {
-			level.Info(logger).Log("msg", "Scraper enabled", "scraper", scraper.Name())
-			enabledScrapers = append(enabledScrapers, scraper)
-		}
-	}
 
 	dsn = os.Getenv("DATA_SOURCE_NAME")
 	if len(dsn) == 0 {
@@ -352,18 +309,14 @@ func main() {
 		}
 	}
 
-	if *reportMod {
-		hostname := *hostnameP
-		if hostname == "" {
-			var err error
-			hostname, err = os.Hostname()
-			if err != nil {
-				level.Error(logger).Log("msg", "get hostname failed", "err", err)
-				os.Exit(1)
-			}
+	// Register only scrapers enabled by flag.
+	enabledScrapers := []collector.Scraper{}
+	for scraper, enabled := range scraperFlags {
+		if *enabled {
+			level.Info(logger).Log("msg", "Scraper enabled", "scraper", scraper.Name())
+			enabledScrapers = append(enabledScrapers, scraper)
 		}
-		pushData(hostname, *env, &enabledScrapers, strings.Split(*reportEndpointsP, ";"), logger)
-	} else {
-		httpServer(&enabledScrapers, logger)
 	}
+	push.
+	httpServer(&enabledScrapers, logger)
 }
