@@ -42,12 +42,8 @@ import (
 )
 
 var (
-	toolkitFlags  = webflag.AddFlags(kingpin.CommandLine, ":9104")
-	listenAddress = kingpin.Flag(
-		"web.listen-address",
-		"Address to listen on for web interface and telemetry.",
-	).Default(":9104").String()
-	metricPath = kingpin.Flag(
+	toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9104")
+	metricPath   = kingpin.Flag(
 		"web.telemetry-path",
 		"Path under which to expose metrics.",
 	).Default("/metrics").String()
@@ -265,8 +261,8 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 		w.Write(landingPage)
 	})
 
-	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
-	srv := &http.Server{Addr: *listenAddress}
+	level.Info(logger).Log("msg", "Listening on address", "address", *toolkitFlags.WebListenAddresses)
+	srv := &http.Server{}
 	if err := web.ListenAndServe(srv, toolkitFlags, logger); err != nil {
 		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
 		os.Exit(1)
