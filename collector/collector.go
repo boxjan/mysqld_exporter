@@ -16,6 +16,7 @@ package collector
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,6 +34,16 @@ const (
 	userstatCheckQuery = `SHOW GLOBAL VARIABLES WHERE Variable_Name='userstat'
 		OR Variable_Name='userstat_running'`
 )
+
+type TransactionDetail struct {
+	Start, End int64
+}
+
+type GlobalTransactionIdentifier struct {
+	ServerId                          string
+	FirstTransaction, LastTransaction int64
+	Transactions                      []TransactionDetail
+}
 
 var logRE = regexp.MustCompile(`.+\.(\d+)$`)
 
@@ -81,4 +92,46 @@ func parsePrivilege(data sql.RawBytes) (float64, bool) {
 		return 0, true
 	}
 	return -1, false
+}
+
+func ParseGTID(s string) ([]GlobalTransactionIdentifier, error) {
+	var res []GlobalTransactionIdentifier
+	gtidItems := strings.Split(s, ",")
+
+	for _, item := range gtidItems {
+		item = strings.TrimSpace(item)
+		g := GlobalTransactionIdentifier{}
+		ss := strings.Split(item, ":")
+		if len(ss) < 2 {
+			return nil, fmt.Errorf("can not parse gtid: %s, transaction item is too little", item)
+		}
+
+		g.ServerId = ss[0]
+		t := TransactionDetail{}
+		var err error
+		for i := 1; i < len(ss); i++ {
+			sss := strings.Split(ss[i], "-")
+			if len(sss) > 2 {
+				return nil, fmt.Errorf("can not part gtid: %s, cut by '-' more than 2 item", item)
+			}
+			t.Start, err = strconv.ParseInt(sss[0], 10, 0)
+			if err != nil {
+				return nil, fmt.Errorf("parse %s to int64 failed with err: %+v", sss[0], err)
+			}
+			if len(sss) == 1 {
+				t.End = t.Start
+			} else {
+				t.End, err = strconv.ParseInt(sss[1], 10, 0)
+				if err != nil {
+					return nil, fmt.Errorf("parse %s to int64 failed with err: %+v", sss[0], err)
+				}
+			}
+			g.LastTransaction = t.End
+			g.Transactions = append(g.Transactions, t)
+		}
+		g.FirstTransaction = g.Transactions[0].Start
+		res = append(res, g)
+	}
+
+	return res, nil
 }

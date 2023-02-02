@@ -18,13 +18,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/boxjan/prometheus-remote-write/exporter-pusher"
+	push "github.com/boxjan/prometheus-remote-write/exporter-pusher"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-kit/log"
@@ -44,7 +43,7 @@ import (
 )
 
 var (
-	toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9104")
+	toolkitFlags  = webflag.AddFlags(kingpin.CommandLine, ":9104")
 	listenAddress = kingpin.Flag(
 		"web.listen-address",
 		"Address to listen on for web interface and telemetry.",
@@ -73,7 +72,7 @@ var scrapers = map[collector.Scraper]bool{
 	collector.ScrapeGlobalStatus{}:                        true,
 	collector.ScrapeGlobalVariables{}:                     true,
 	collector.ScrapeSlaveStatus{}:                         true,
-	collector.ScrapeProcesslist{}:                         false,
+	collector.ScrapeProcesslist{}:                         true,
 	collector.ScrapeUser{}:                                false,
 	collector.ScrapeTableSchema{}:                         false,
 	collector.ScrapeInfoSchemaInnodbTablespaces{}:         false,
@@ -201,9 +200,19 @@ func init() {
 	prometheus.MustRegister(version.NewCollector("mysqld_exporter"))
 }
 
+func newMysqlGatherers(cs ...prometheus.Collector) *prometheus.Gatherers {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(cs...)
+
+	return &prometheus.Gatherers{
+		prometheus.DefaultGatherer,
+		registry,
+	}
+}
+
 func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		params := r.URL.Query()["collect[]"]
+		collect := r.URL.Query()["collect[]"]
 		// Use request context for cancellation when connection gets closed.
 		ctx := r.Context()
 		// If a timeout is configured via the Prometheus header, add it to the context.
@@ -230,16 +239,8 @@ func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger 
 
 		filteredScrapers := filterScrapers(scrapers, collect)
 
-		registry := prometheus.NewRegistry()
-
-		registry.MustRegister(collector.New(ctx, dsn, metrics, filteredScrapers, logger))
-
-		gatherers := prometheus.Gatherers{
-			prometheus.DefaultGatherer,
-			registry,
-		}
 		// Delegate http serving to Prometheus client library, which will call collector.Collect.
-		h := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{})
+		h := promhttp.HandlerFor(newMysqlGatherers(collector.New(ctx, dsn, metrics, filteredScrapers, logger)), promhttp.HandlerOpts{})
 		h.ServeHTTP(w, r)
 	}
 }
@@ -266,7 +267,7 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 
 	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
 	srv := &http.Server{Addr: *listenAddress}
-	if err := web.ListenAndServe(srv, *toolkitFlags, logger); err != nil {
+	if err := web.ListenAndServe(srv, toolkitFlags, logger); err != nil {
 		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
 		os.Exit(1)
 	}
@@ -295,6 +296,7 @@ func main() {
 	kingpin.Version(version.Print("mysqld_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
+
 	logger := promlog.New(promlogConfig)
 
 	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
@@ -317,6 +319,8 @@ func main() {
 			enabledScrapers = append(enabledScrapers, scraper)
 		}
 	}
-	push.
+
+	filteredScrapers := filterScrapers(enabledScrapers, nil)
+	push.ReportMod(newMysqlGatherers(collector.New(context.Background(), dsn, collector.NewMetrics(), filteredScrapers, logger)), logger)
 	httpServer(&enabledScrapers, logger)
 }
