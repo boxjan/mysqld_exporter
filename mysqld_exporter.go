@@ -18,13 +18,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/boxjan/prometheus-remote-write/exporter-pusher"
-	"io/ioutil"
+	push "github.com/boxjan/prometheus-remote-write/exporter-pusher"
 	"net/http"
 	"os"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-kit/log"
@@ -45,11 +43,7 @@ import (
 
 var (
 	toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9104")
-	listenAddress = kingpin.Flag(
-		"web.listen-address",
-		"Address to listen on for web interface and telemetry.",
-	).Default(":9104").String()
-	metricPath = kingpin.Flag(
+	metricPath   = kingpin.Flag(
 		"web.telemetry-path",
 		"Path under which to expose metrics.",
 	).Default("/metrics").String()
@@ -72,23 +66,24 @@ var (
 var scrapers = map[collector.Scraper]bool{
 	collector.ScrapeGlobalStatus{}:                        true,
 	collector.ScrapeGlobalVariables{}:                     true,
+	collector.ScrapeMasterStatus{}:                        true,
 	collector.ScrapeSlaveStatus{}:                         true,
-	collector.ScrapeProcesslist{}:                         false,
+	collector.ScrapeProcesslist{}:                         true,
 	collector.ScrapeUser{}:                                false,
 	collector.ScrapeTableSchema{}:                         false,
 	collector.ScrapeInfoSchemaInnodbTablespaces{}:         false,
-	collector.ScrapeInnodbMetrics{}:                       false,
-	collector.ScrapeAutoIncrementColumns{}:                false,
-	collector.ScrapeBinlogSize{}:                          false,
+	collector.ScrapeInnodbMetrics{}:                       true,
+	collector.ScrapeAutoIncrementColumns{}:                true,
+	collector.ScrapeBinlogSize{}:                          true,
 	collector.ScrapePerfTableIOWaits{}:                    false,
 	collector.ScrapePerfIndexIOWaits{}:                    false,
 	collector.ScrapePerfTableLockWaits{}:                  false,
 	collector.ScrapePerfEventsStatements{}:                false,
 	collector.ScrapePerfEventsStatementsSum{}:             false,
-	collector.ScrapePerfEventsWaits{}:                     false,
-	collector.ScrapePerfFileEvents{}:                      false,
-	collector.ScrapePerfFileInstances{}:                   false,
-	collector.ScrapePerfMemoryEvents{}:                    false,
+	collector.ScrapePerfEventsWaits{}:                     true,
+	collector.ScrapePerfFileEvents{}:                      true,
+	collector.ScrapePerfFileInstances{}:                   true,
+	collector.ScrapePerfMemoryEvents{}:                    true,
 	collector.ScrapePerfReplicationGroupMembers{}:         false,
 	collector.ScrapePerfReplicationGroupMemberStats{}:     false,
 	collector.ScrapePerfReplicationApplierStatsByWorker{}: false,
@@ -100,10 +95,10 @@ var scrapers = map[collector.Scraper]bool{
 	collector.ScrapeInnodbCmpMem{}:                        true,
 	collector.ScrapeQueryResponseTime{}:                   true,
 	collector.ScrapeEngineTokudbStatus{}:                  false,
-	collector.ScrapeEngineInnodbStatus{}:                  false,
+	collector.ScrapeEngineInnodbStatus{}:                  true,
 	collector.ScrapeHeartbeat{}:                           false,
 	collector.ScrapeSlaveHosts{}:                          false,
-	collector.ScrapeReplicaHost{}:                         false,
+	collector.ScrapeReplicaHost{}:                         true,
 }
 
 func filterScrapers(scrapers []collector.Scraper, collectParams []string) []collector.Scraper {
@@ -173,7 +168,7 @@ func parseMycnf(config interface{}) (string, error) {
 func customizeTLS(sslCA string, sslCert string, sslKey string) error {
 	var tlsCfg tls.Config
 	caBundle := x509.NewCertPool()
-	pemCA, err := ioutil.ReadFile(sslCA)
+	pemCA, err := os.ReadFile(sslCA)
 	if err != nil {
 		return err
 	}
@@ -201,9 +196,19 @@ func init() {
 	prometheus.MustRegister(version.NewCollector("mysqld_exporter"))
 }
 
+func newMysqlGatherers(cs ...prometheus.Collector) *prometheus.Gatherers {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(cs...)
+
+	return &prometheus.Gatherers{
+		prometheus.DefaultGatherer,
+		registry,
+	}
+}
+
 func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		params := r.URL.Query()["collect[]"]
+		collect := r.URL.Query()["collect[]"]
 		// Use request context for cancellation when connection gets closed.
 		ctx := r.Context()
 		// If a timeout is configured via the Prometheus header, add it to the context.
@@ -230,16 +235,8 @@ func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger 
 
 		filteredScrapers := filterScrapers(scrapers, collect)
 
-		registry := prometheus.NewRegistry()
-
-		registry.MustRegister(collector.New(ctx, dsn, metrics, filteredScrapers, logger))
-
-		gatherers := prometheus.Gatherers{
-			prometheus.DefaultGatherer,
-			registry,
-		}
 		// Delegate http serving to Prometheus client library, which will call collector.Collect.
-		h := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{})
+		h := promhttp.HandlerFor(newMysqlGatherers(collector.New(ctx, dsn, metrics, filteredScrapers, logger)), promhttp.HandlerOpts{})
 		h.ServeHTTP(w, r)
 	}
 }
@@ -264,9 +261,9 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 		w.Write(landingPage)
 	})
 
-	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
-	srv := &http.Server{Addr: *listenAddress}
-	if err := web.ListenAndServe(srv, *toolkitFlags, logger); err != nil {
+	level.Info(logger).Log("msg", "Listening on address", "address", *toolkitFlags.WebListenAddresses)
+	srv := &http.Server{}
+	if err := web.ListenAndServe(srv, toolkitFlags, logger); err != nil {
 		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
 		os.Exit(1)
 	}
@@ -295,6 +292,7 @@ func main() {
 	kingpin.Version(version.Print("mysqld_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
+
 	logger := promlog.New(promlogConfig)
 
 	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
@@ -317,6 +315,8 @@ func main() {
 			enabledScrapers = append(enabledScrapers, scraper)
 		}
 	}
-	push.
+
+	filteredScrapers := filterScrapers(enabledScrapers, nil)
+	push.ReportMod(newMysqlGatherers(collector.New(context.Background(), dsn, collector.NewMetrics(), filteredScrapers, logger)), logger)
 	httpServer(&enabledScrapers, logger)
 }

@@ -148,13 +148,17 @@ func (ScrapeGlobalVariables) Scrape(ctx context.Context, db *sql.DB, ch chan<- p
 	var key string
 	var val sql.RawBytes
 	var textItems = map[string]string{
-		"innodb_version":         "",
-		"version":                "",
-		"version_comment":        "",
-		"wsrep_cluster_name":     "",
-		"wsrep_provider_options": "",
-		"tx_isolation":           "",
-		"transaction_isolation":  "",
+		"innodb_version":          "",
+		"version":                 "",
+		"version_comment":         "",
+		"wsrep_cluster_name":      "",
+		"wsrep_provider_options":  "",
+		"tx_isolation":            "",
+		"transaction_isolation":   "",
+		"server_uuid":             "",
+		"server_id":               "",
+		"version_compile_os":      "",
+		"version_compile_machine": "",
 	}
 
 	for globalVariablesRows.Next() {
@@ -173,7 +177,6 @@ func (ScrapeGlobalVariables) Scrape(ctx context.Context, db *sql.DB, ch chan<- p
 				prometheus.GaugeValue,
 				floatVal,
 			)
-			continue
 		}
 
 		if _, ok := textItems[key]; ok {
@@ -186,6 +189,14 @@ func (ScrapeGlobalVariables) Scrape(ctx context.Context, db *sql.DB, ch chan<- p
 		prometheus.NewDesc(prometheus.BuildFQName(namespace, "version", "info"), "MySQL version and distribution.",
 			[]string{"innodb_version", "version", "version_comment"}, nil),
 		prometheus.GaugeValue, 1, textItems["innodb_version"], textItems["version"], textItems["version_comment"],
+	)
+
+	// mysql_server_info metric.
+	ch <- prometheus.MustNewConstMetric(
+		prometheus.NewDesc(prometheus.BuildFQName(namespace, "server", "info"), "MySQL version and distribution.",
+			[]string{"uuid", "id", "version", "os", "arch"}, nil),
+		prometheus.GaugeValue, 1,
+		textItems["server_uuid"], textItems["server_id"], textItems["version"], textItems["version_compile_os"], textItems["version_compile_machine"],
 	)
 
 	// mysql_galera_variables_info metric.

@@ -15,9 +15,11 @@ package collector
 
 import (
 	"strings"
+	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
 type labelMap map[string]string
@@ -53,4 +55,85 @@ func sanitizeQuery(q string) string {
 	q = strings.Replace(q, ")", "\\)", -1)
 	q = strings.Replace(q, "*", "\\*", -1)
 	return q
+}
+
+func TestParseGTID(t *testing.T) {
+	testcase := []struct {
+		s      string
+		target []GlobalTransactionIdentifier
+	}{
+		{
+			s: "3E11FA47-71CA-11E1-9E33-C80AA9429562:23",
+			target: []GlobalTransactionIdentifier{
+				{
+					ServerId:         "3E11FA47-71CA-11E1-9E33-C80AA9429562",
+					FirstTransaction: 23,
+					LastTransaction:  23,
+					Transactions:     []TransactionDetail{{Start: 23, End: 23}},
+				},
+			},
+		},
+		{
+			s: "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-5",
+			target: []GlobalTransactionIdentifier{
+				{
+					ServerId:         "3E11FA47-71CA-11E1-9E33-C80AA9429562",
+					FirstTransaction: 1,
+					LastTransaction:  5,
+					Transactions:     []TransactionDetail{{Start: 1, End: 5}},
+				},
+			},
+		},
+		{
+			s:      "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-5-6",
+			target: nil,
+		},
+		{
+			s:      "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-A",
+			target: nil,
+		},
+		{
+			s:      "3E11FA47-71CA-11E1-9E33-C80AA9429562",
+			target: nil,
+		},
+		{
+			s:      "3E11FA47-71CA-11E1-9E33-C80AA9429562:",
+			target: nil,
+		},
+		{
+			s: "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-3:11:47-49",
+			target: []GlobalTransactionIdentifier{
+				{
+					ServerId:         "3E11FA47-71CA-11E1-9E33-C80AA9429562",
+					FirstTransaction: 1,
+					LastTransaction:  49,
+					Transactions:     []TransactionDetail{{Start: 1, End: 3}, {Start: 11, End: 11}, {Start: 47, End: 49}},
+				},
+			},
+		},
+		{
+			s: "2174B383-5441-11E8-B90A-C80AA9429562:1-3, 24DA167-0C0C-11E8-8442-00059A3C7B00:1-19",
+			target: []GlobalTransactionIdentifier{
+				{
+					ServerId:         "2174B383-5441-11E8-B90A-C80AA9429562",
+					FirstTransaction: 1,
+					LastTransaction:  3,
+					Transactions:     []TransactionDetail{{Start: 1, End: 3}},
+				},
+				{
+					ServerId:         "24DA167-0C0C-11E8-8442-00059A3C7B00",
+					FirstTransaction: 1,
+					LastTransaction:  19,
+					Transactions:     []TransactionDetail{{Start: 1, End: 19}},
+				},
+			},
+		},
+	}
+
+	Convey("gtid parse", t, func() {
+		for _, test := range testcase {
+			got, _ := ParseGTID(test.s)
+			So(got, ShouldResemble, test.target)
+		}
+	})
 }

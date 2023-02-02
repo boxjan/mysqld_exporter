@@ -31,9 +31,9 @@ func TestScrapeSlaveStatus(t *testing.T) {
 	}
 	defer db.Close()
 
-	columns := []string{"Master_Host", "Read_Master_Log_Pos", "Slave_IO_Running", "Slave_SQL_Running", "Seconds_Behind_Master"}
+	columns := []string{"Master_Host", "Read_Master_Log_Pos", "Slave_IO_Running", "Slave_SQL_Running", "Seconds_Behind_Master", "Master_Log_File", "Executed_Gtid_Set"}
 	rows := sqlmock.NewRows(columns).
-		AddRow("127.0.0.1", "1", "Connecting", "Yes", "2")
+		AddRow("127.0.0.1", "1", "Connecting", "Yes", "2", "binlog.4", "215d19f8-7eca-11ed-9d98-00163e000147:244965-258014")
 	mock.ExpectQuery(sanitizeQuery("SHOW SLAVE STATUS")).WillReturnRows(rows)
 
 	ch := make(chan prometheus.Metric)
@@ -49,6 +49,9 @@ func TestScrapeSlaveStatus(t *testing.T) {
 		{labels: labelMap{"channel_name": "", "connection_name": "", "master_host": "127.0.0.1", "master_uuid": ""}, value: 0, metricType: dto.MetricType_UNTYPED},
 		{labels: labelMap{"channel_name": "", "connection_name": "", "master_host": "127.0.0.1", "master_uuid": ""}, value: 1, metricType: dto.MetricType_UNTYPED},
 		{labels: labelMap{"channel_name": "", "connection_name": "", "master_host": "127.0.0.1", "master_uuid": ""}, value: 2, metricType: dto.MetricType_UNTYPED},
+		{labels: labelMap{"channel_name": "", "connection_name": "", "master_host": "127.0.0.1", "master_uuid": ""}, value: 4, metricType: dto.MetricType_UNTYPED},
+		{labels: labelMap{"channel_name": "", "connection_name": "", "master_host": "127.0.0.1", "master_uuid": "", "executed_server_id": "215d19f8-7eca-11ed-9d98-00163e000147", "partition": ""}, value: 244965, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"channel_name": "", "connection_name": "", "master_host": "127.0.0.1", "master_uuid": "", "executed_server_id": "215d19f8-7eca-11ed-9d98-00163e000147", "partition": ""}, value: 258014, metricType: dto.MetricType_GAUGE},
 	}
 	convey.Convey("Metrics comparison", t, func() {
 		for _, expect := range counterExpected {

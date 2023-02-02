@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/go-kit/log"
@@ -32,6 +33,8 @@ const (
 
 var slaveStatusQueries = [2]string{"SHOW ALL SLAVES STATUS", "SHOW SLAVE STATUS"}
 var slaveStatusQuerySuffixes = [3]string{" NONBLOCKING", " NOLOCK", ""}
+
+var ()
 
 func columnIndex(slaveCols []string, colName string) int {
 	for idx := range slaveCols {
@@ -118,18 +121,61 @@ func (ScrapeSlaveStatus) Scrape(ctx context.Context, db *sql.DB, ch chan<- prome
 		connectionName := columnValue(scanArgs, slaveCols, "Connection_name") // MariaDB
 
 		for i, col := range slaveCols {
-			if value, ok := parseStatus(*scanArgs[i].(*sql.RawBytes)); ok { // Silently skip unparsable values.
+			switch col {
+			case "Executed_Gtid_Set":
+				GTIDs, err := ParseGTID(string(*scanArgs[i].(*sql.RawBytes)))
+				if err != nil {
+					return err
+				}
+				for _, item := range GTIDs {
+					ch <- prometheus.MustNewConstMetric(
+						prometheus.NewDesc(
+							prometheus.BuildFQName(namespace, slaveStatus, strings.ToLower(col)+"_start"),
+							"Executed GTID from SHOW SLAVE STATUS.",
+							[]string{"master_host", "master_uuid", "channel_name", "connection_name", "executed_server_id", "partition"},
+							nil,
+						), prometheus.GaugeValue, float64(item.FirstTransaction),
+						masterHost, masterUUID, channelName, connectionName, item.ServerId, "")
+					ch <- prometheus.MustNewConstMetric(
+						prometheus.NewDesc(
+							prometheus.BuildFQName(namespace, slaveStatus, strings.ToLower(col)+"_end"),
+							"Executed GTID from SHOW SLAVE STATUS.",
+							[]string{"master_host", "master_uuid", "channel_name", "connection_name", "executed_server_id", "partition"},
+							nil,
+						), prometheus.GaugeValue, float64(item.LastTransaction),
+						masterHost, masterUUID, channelName, connectionName, item.ServerId, "")
+				}
+			case "Master_Log_File", "Relay_Master_Log_File":
+				ss := strings.Split(string(*scanArgs[i].(*sql.RawBytes)), ".")
+				if len(ss) < 2 {
+					return fmt.Errorf("split %s by `.` item not enough", string(*scanArgs[i].(*sql.RawBytes)))
+				}
+				value, err := strconv.ParseFloat(ss[1], 64)
+				if err != nil {
+					return err
+				}
 				ch <- prometheus.MustNewConstMetric(
 					prometheus.NewDesc(
-						prometheus.BuildFQName(namespace, slaveStatus, strings.ToLower(col)),
-						"Generic metric from SHOW SLAVE STATUS.",
+						prometheus.BuildFQName(namespace, slaveStatus, strings.ToLower(col)+"_num"),
+						"Receive master log file num from SHOW SLAVE STATUS.",
 						[]string{"master_host", "master_uuid", "channel_name", "connection_name"},
 						nil,
-					),
-					prometheus.UntypedValue,
-					value,
-					masterHost, masterUUID, channelName, connectionName,
-				)
+					), prometheus.UntypedValue, value,
+					masterHost, masterUUID, channelName, connectionName)
+			default:
+				if value, ok := parseStatus(*scanArgs[i].(*sql.RawBytes)); ok { // Silently skip unparsable values.
+					ch <- prometheus.MustNewConstMetric(
+						prometheus.NewDesc(
+							prometheus.BuildFQName(namespace, slaveStatus, strings.ToLower(col)),
+							"Generic metric from SHOW SLAVE STATUS.",
+							[]string{"master_host", "master_uuid", "channel_name", "connection_name"},
+							nil,
+						),
+						prometheus.UntypedValue,
+						value,
+						masterHost, masterUUID, channelName, connectionName,
+					)
+				}
 			}
 		}
 	}
