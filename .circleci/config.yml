@@ -1,13 +1,13 @@
 ---
 version: 2.1
 orbs:
-  prometheus: prometheus/prometheus@0.16.0
+  prometheus: prometheus/prometheus@0.17.1
 executors:
   # Whenever the Go version is updated here, .promu.yml
   # should also be updated.
   golang:
     docker:
-      - image: cimg/go:1.19
+      - image: cimg/go:1.20
 jobs:
   test:
     executor: golang
@@ -18,7 +18,7 @@ jobs:
           file: mysqld_exporter
   integration:
     docker:
-      - image: cimg/go:1.19
+      - image: cimg/go:1.20
       - image: << parameters.mysql_image >>
         environment:
           MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
@@ -35,7 +35,7 @@ jobs:
       - run: make test
   codespell:
     docker:
-      - image: cimg/python:3.10
+      - image: cimg/python:3.11
     steps:
       - checkout
       - run: pip install codespell
@@ -66,14 +66,14 @@ workflows:
                 - mariadb:10.4
                 - mariadb:10.5
                 - mariadb:10.6
-                - mariadb:10.7
+                - mariadb:10.11
       - prometheus/build:
           name: build
           parallelism: 3
           promu_opts: "-p linux/amd64 -p windows/amd64 -p linux/arm64 -p darwin/amd64 -p darwin/arm64 -p linux/386"
           filters:
             tags:
-              ignore: /^v2(\.[0-9]+){2}(-.+|[^-.]*)$/
+              ignore: /^v.*/
             branches:
               ignore: /^(main|release-.*|.*build-all.*)$/
       - prometheus/build:
@@ -83,8 +83,7 @@ workflows:
             branches:
               only: /^(main|release-.*|.*build-all.*)$/
             tags:
-              only: /^v2(\.[0-9]+){2}(-.+|[^-.]*)$/
-
+              only: /^v.*/
       - codespell:
           filters:
             tags:
@@ -108,6 +107,6 @@ workflows:
             - build_all
           filters:
             tags:
-              only: /^v[0-9]+(\.[0-9]+){2}(-.+|[^-.]*)$/
+              only: /^v.*/
             branches:
               ignore: /.*/

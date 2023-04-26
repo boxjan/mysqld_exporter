@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/go-sql-driver/mysql"
@@ -35,7 +36,6 @@ import (
 	"github.com/prometheus/common/version"
 	"github.com/prometheus/exporter-toolkit/web"
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
-	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/ini.v1"
 
 	"github.com/prometheus/mysqld_exporter/collector"
@@ -43,7 +43,7 @@ import (
 
 var (
 	toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9104")
-	metricPath   = kingpin.Flag(
+	metricsPath = kingpin.Flag(
 		"web.telemetry-path",
 		"Path under which to expose metrics.",
 	).Default("/metrics").String()
@@ -87,6 +87,7 @@ var scrapers = map[collector.Scraper]bool{
 	collector.ScrapePerfReplicationGroupMembers{}:         false,
 	collector.ScrapePerfReplicationGroupMemberStats{}:     false,
 	collector.ScrapePerfReplicationApplierStatsByWorker{}: false,
+	collector.ScrapeSysUserSummary{}:                      false,
 	collector.ScrapeUserStat{}:                            false,
 	collector.ScrapeClientStat{}:                          false,
 	collector.ScrapeTableStat{}:                           false,
@@ -102,7 +103,7 @@ var scrapers = map[collector.Scraper]bool{
 }
 
 func filterScrapers(scrapers []collector.Scraper, collectParams []string) []collector.Scraper {
-	filteredScrapers := scrapers
+	var filteredScrapers []collector.Scraper
 
 	// Check if we have some "collect[]" query parameters.
 	if len(collectParams) > 0 {
@@ -116,6 +117,9 @@ func filterScrapers(scrapers []collector.Scraper, collectParams []string) []coll
 				filteredScrapers = append(filteredScrapers, scraper)
 			}
 		}
+	}
+	if len(filteredScrapers) == 0 {
+		return scrapers
 	}
 	return filteredScrapers
 }
@@ -248,7 +252,7 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 <head><title>MySQLd exporter</title></head>
 <body>
 <h1>MySQLd exporter</h1>
-<p><a href='` + *metricPath + `'>Metrics</a></p>
+<p><a href='` + *metricsPath + `'>Metrics</a></p>
 </body>
 </html>
 `)
@@ -256,7 +260,7 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 	// Register only scrapers enabled by flag.
 
 	handlerFunc := newHandler(collector.NewMetrics(), *enabledScrapers, logger)
-	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	http.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(landingPage)
 	})
@@ -296,7 +300,7 @@ func main() {
 	logger := promlog.New(promlogConfig)
 
 	level.Info(logger).Log("msg", "Starting mysqld_exporter", "version", version.Info())
-	level.Info(logger).Log("msg", "Build context", version.BuildContext())
+	level.Info(logger).Log("msg", "Build context", "build_context", version.BuildContext())
 
 	dsn = os.Getenv("DATA_SOURCE_NAME")
 	if len(dsn) == 0 {
@@ -315,7 +319,18 @@ func main() {
 			enabledScrapers = append(enabledScrapers, scraper)
 		}
 	}
+	handlerFunc := newHandler(collector.NewMetrics(), enabledScrapers, logger)
+	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(landingPage)
+	})
+	http.HandleFunc("/probe", handleProbe(collector.NewMetrics(), enabledScrapers, logger))
 
+	srv := &http.Server{}
+	if err := web.ListenAndServe(srv, toolkitFlags, logger); err != nil {
+		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
+		os.Exit(1)
+	}
 	filteredScrapers := filterScrapers(enabledScrapers, nil)
 	push.ReportMod(newMysqlGatherers(collector.New(context.Background(), dsn, collector.NewMetrics(), filteredScrapers, logger)), logger)
 	httpServer(&enabledScrapers, logger)
