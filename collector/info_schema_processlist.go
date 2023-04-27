@@ -56,6 +56,14 @@ var (
 		"collect.info_schema.processlist.processes_by_host",
 		"Enable collecting the number of processes by host",
 	).Default("true").Bool()
+	processesDetailCountFlag = kingpin.Flag(
+		"collect.info_schema.processlist.processes_detail_count",
+		"Enable collecting detail for every process",
+	).Default("false").Bool()
+	processesDetailTimeFlag = kingpin.Flag(
+		"collect.info_schema.processlist.processes_detail_time",
+		"Enable collecting detail for every process",
+	).Default("false").Bool()
 )
 
 // Metric descriptors.
@@ -76,6 +84,14 @@ var (
 		prometheus.BuildFQName(namespace, informationSchema, "processlist_processes_by_host"),
 		"The number of processes by host.",
 		[]string{"client_host"}, nil)
+	processesDetailCountDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, informationSchema, "processlist_processes_detail_count"),
+		"The number of processes by user host command state.",
+		[]string{"mysql_user", "client_host", "command", "state"}, nil)
+	processesDetailTimeDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, informationSchema, "processlist_processes_detail_time"),
+		"The number of seconds threads have used split by user host command state",
+		[]string{"mysql_user", "client_host", "command", "state"}, nil)
 )
 
 // ScrapeProcesslist collects from `information_schema.processlist`.
@@ -122,6 +138,10 @@ func (ScrapeProcesslist) Scrape(ctx context.Context, db *sql.DB, ch chan<- prome
 	stateHostCounts := make(map[string]uint32)
 	stateUserCounts := make(map[string]uint32)
 
+	// host -> user -> command -> state: value
+	stateHostUserCommandCount := make(map[string]map[string]map[string]map[string]uint32)
+	stateHostUserCommandTime := make(map[string]map[string]map[string]map[string]uint32)
+
 	for processlistRows.Next() {
 		err = processlistRows.Scan(&user, &host, &command, &state, &count, &time)
 		if err != nil {
@@ -149,10 +169,39 @@ func (ScrapeProcesslist) Scrape(ctx context.Context, db *sql.DB, ch chan<- prome
 			stateUserCounts[user] = 0
 		}
 
+		if _, ok := stateHostUserCommandCount[user]; !ok {
+			stateHostUserCommandCount[user] = make(map[string]map[string]map[string]uint32)
+		}
+		if _, ok := stateHostUserCommandCount[user][host]; !ok {
+			stateHostUserCommandCount[user][host] = make(map[string]map[string]uint32)
+		}
+		if _, ok := stateHostUserCommandCount[user][host][command]; !ok {
+			stateHostUserCommandCount[user][host][command] = make(map[string]uint32)
+		}
+		if _, ok := stateHostUserCommandCount[user][host][command][state]; !ok {
+			stateHostUserCommandCount[user][host][command][state] = 0
+		}
+
+		if _, ok := stateHostUserCommandTime[user]; !ok {
+			stateHostUserCommandTime[user] = make(map[string]map[string]map[string]uint32)
+		}
+		if _, ok := stateHostUserCommandTime[user][host]; !ok {
+			stateHostUserCommandTime[user][host] = make(map[string]map[string]uint32)
+		}
+		if _, ok := stateHostUserCommandTime[user][host][command]; !ok {
+			stateHostUserCommandTime[user][host][command] = make(map[string]uint32)
+		}
+		if _, ok := stateHostUserCommandTime[user][host][command][state]; !ok {
+			stateHostUserCommandTime[user][host][command][state] = 0
+		}
+
 		stateCounts[command][state] += count
 		stateTime[command][state] += time
 		stateHostCounts[host] += count
 		stateUserCounts[user] += count
+
+		stateHostUserCommandCount[user][host][command][state] += count
+		stateHostUserCommandTime[user][host][command][state] += time
 	}
 
 	for _, command := range sortedMapKeys(stateCounts) {
@@ -170,6 +219,34 @@ func (ScrapeProcesslist) Scrape(ctx context.Context, db *sql.DB, ch chan<- prome
 	if *processesByUserFlag {
 		for _, user := range sortedMapKeys(stateUserCounts) {
 			ch <- prometheus.MustNewConstMetric(processesByUserDesc, prometheus.GaugeValue, float64(stateUserCounts[user]), user)
+		}
+	}
+
+	if *processesDetailCountFlag {
+		for _, user := range sortedMapKeys(stateHostUserCommandCount) {
+			for _, host := range sortedMapKeys(stateHostUserCommandCount[user]) {
+				for _, command := range sortedMapKeys(stateHostUserCommandCount[user][host]) {
+					for _, state := range sortedMapKeys(stateHostUserCommandCount[user][host][command]) {
+						ch <- prometheus.MustNewConstMetric(processesDetailCountDesc, prometheus.GaugeValue,
+							float64(stateHostUserCommandCount[user][host][command][state]),
+							user, host, command, state)
+					}
+				}
+			}
+		}
+	}
+
+	if *processesDetailTimeFlag {
+		for _, user := range sortedMapKeys(stateHostUserCommandTime) {
+			for _, host := range sortedMapKeys(stateHostUserCommandTime[user]) {
+				for _, command := range sortedMapKeys(stateHostUserCommandTime[user][host]) {
+					for _, state := range sortedMapKeys(stateHostUserCommandTime[user][host][command]) {
+						ch <- prometheus.MustNewConstMetric(processesDetailTimeDesc, prometheus.GaugeValue,
+							float64(stateHostUserCommandTime[user][host][command][state]),
+							user, host, command, state)
+					}
+				}
+			}
 		}
 	}
 

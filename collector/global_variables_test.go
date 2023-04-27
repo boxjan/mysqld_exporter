@@ -67,6 +67,7 @@ func TestScrapeGlobalVariables(t *testing.T) {
 		{labels: labelMap{}, value: 1, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{}, value: 2, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{"innodb_version": "5.6.30-76.3", "version": "5.6.30-76.3-56", "version_comment": "Percona XtraDB Cluster..."}, value: 1, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"arch": "", "id": "", "uuid": "", "os": "Linux", "version": "5.6.30-76.3-56"}, value: 1, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{"wsrep_cluster_name": "supercluster"}, value: 1, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{}, value: 134217728, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{"level": "REPEATABLE-READ"}, value: 1, metricType: dto.MetricType_GAUGE},

@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	push "github.com/boxjan/prometheus-remote-write/exporter-pusher"
+	"gopkg.in/ini.v1"
 	"net/http"
 	"os"
 	"path"
@@ -36,14 +37,12 @@ import (
 	"github.com/prometheus/common/version"
 	"github.com/prometheus/exporter-toolkit/web"
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
-	"gopkg.in/ini.v1"
-
 	"github.com/prometheus/mysqld_exporter/collector"
 )
 
 var (
 	toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9104")
-	metricsPath = kingpin.Flag(
+	metricsPath  = kingpin.Flag(
 		"web.telemetry-path",
 		"Path under which to expose metrics.",
 	).Default("/metrics").String()
@@ -210,7 +209,7 @@ func newMysqlGatherers(cs ...prometheus.Collector) *prometheus.Gatherers {
 	}
 }
 
-func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger log.Logger) http.HandlerFunc {
+func newHandler(scrapers []collector.Scraper, logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		collect := r.URL.Query()["collect[]"]
 		// Use request context for cancellation when connection gets closed.
@@ -240,7 +239,7 @@ func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger 
 		filteredScrapers := filterScrapers(scrapers, collect)
 
 		// Delegate http serving to Prometheus client library, which will call collector.Collect.
-		h := promhttp.HandlerFor(newMysqlGatherers(collector.New(ctx, dsn, metrics, filteredScrapers, logger)), promhttp.HandlerOpts{})
+		h := promhttp.HandlerFor(newMysqlGatherers(collector.New(ctx, dsn, filteredScrapers, logger)), promhttp.HandlerOpts{})
 		h.ServeHTTP(w, r)
 	}
 }
@@ -258,8 +257,8 @@ func httpServer(enabledScrapers *[]collector.Scraper, logger log.Logger) {
 `)
 
 	// Register only scrapers enabled by flag.
-
-	handlerFunc := newHandler(collector.NewMetrics(), *enabledScrapers, logger)
+	collector.New(context.Background(), dsn, *enabledScrapers, logger)
+	handlerFunc := newHandler(*enabledScrapers, logger)
 	http.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(landingPage)
@@ -319,19 +318,8 @@ func main() {
 			enabledScrapers = append(enabledScrapers, scraper)
 		}
 	}
-	handlerFunc := newHandler(collector.NewMetrics(), enabledScrapers, logger)
-	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write(landingPage)
-	})
-	http.HandleFunc("/probe", handleProbe(collector.NewMetrics(), enabledScrapers, logger))
 
-	srv := &http.Server{}
-	if err := web.ListenAndServe(srv, toolkitFlags, logger); err != nil {
-		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
-		os.Exit(1)
-	}
 	filteredScrapers := filterScrapers(enabledScrapers, nil)
-	push.ReportMod(newMysqlGatherers(collector.New(context.Background(), dsn, collector.NewMetrics(), filteredScrapers, logger)), logger)
+	push.ReportMod(newMysqlGatherers(collector.New(context.Background(), dsn, filteredScrapers, logger)), logger)
 	httpServer(&enabledScrapers, logger)
 }

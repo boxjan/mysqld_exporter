@@ -16,20 +16,21 @@ package collector
 import (
 	"context"
 	"fmt"
-	"testing"
-
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/smartystreets/goconvey/convey"
+	"testing"
 )
 
 func TestScrapeProcesslist(t *testing.T) {
 	_, err := kingpin.CommandLine.Parse([]string{
 		"--collect.info_schema.processlist.processes_by_user",
 		"--collect.info_schema.processlist.processes_by_host",
+		"--collect.info_schema.processlist.processes_detail_count",
+		"--collect.info_schema.processlist.processes_detail_time",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +83,20 @@ func TestScrapeProcesslist(t *testing.T) {
 		{labels: labelMap{"mysql_user": "manager"}, value: 14, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{"mysql_user": "root"}, value: 1, metricType: dto.MetricType_GAUGE},
 		{labels: labelMap{"mysql_user": "system user"}, value: 2, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "localhost", "command": "daemon", "mysql_user": "event_scheduler", "state": "waiting_on_empty_queue"}, value: 1, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.154", "command": "sleep", "mysql_user": "feedback", "state": "unknown"}, value: 8, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.179", "command": "sleep", "mysql_user": "feedback", "state": "unknown"}, value: 2, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.234", "command": "sleep", "mysql_user": "manager", "state": "unknown"}, value: 14, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.253", "command": "sleep", "mysql_user": "root", "state": "unknown"}, value: 1, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "unknown", "command": "connect", "mysql_user": "system user", "state": "waiting_for_handler_commit"}, value: 1, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "unknown", "command": "query", "mysql_user": "system user", "state": "slave_has_read_all_relay_log_waiting_for_more_updates"}, value: 1, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "localhost", "command": "daemon", "mysql_user": "event_scheduler", "state": "waiting_on_empty_queue"}, value: 7271248, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.154", "command": "sleep", "mysql_user": "feedback", "state": "unknown"}, value: 842, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.179", "command": "sleep", "mysql_user": "feedback", "state": "unknown"}, value: 14, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.234", "command": "sleep", "mysql_user": "manager", "state": "unknown"}, value: 149, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "10.0.7.253", "command": "sleep", "mysql_user": "root", "state": "unknown"}, value: 20, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "unknown", "command": "connect", "mysql_user": "system user", "state": "waiting_for_handler_commit"}, value: 7271248, metricType: dto.MetricType_GAUGE},
+		{labels: labelMap{"client_host": "unknown", "command": "query", "mysql_user": "system user", "state": "slave_has_read_all_relay_log_waiting_for_more_updates"}, value: 7271248, metricType: dto.MetricType_GAUGE},
 	}
 	convey.Convey("Metrics comparison", t, func() {
 		for _, expect := range expected {

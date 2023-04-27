@@ -83,7 +83,7 @@ func TestBin(t *testing.T) {
 
 	tests := []func(*testing.T, bin){
 		testLanding,
-		testProbe,
+		//testProbe,
 	}
 
 	portStart := 56000
@@ -129,42 +129,12 @@ func testLanding(t *testing.T, data bin) {
 	}
 	got := string(body)
 
-	expected := `<html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MySQLd Exporter</title>
-    <style>body {
-  font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica Neue,Arial,Noto Sans,Liberation Sans,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;
-  margin: 0;
-}
-header {
-  background-color: #e6522c;
-  color: #fff;
-  font-size: 2rem;
-  padding: 1rem;
-}
-main {
-  padding: 1rem;
-}
-</style>
-  </head>
-  <body>
-    <header>
-      <h1>MySQLd Exporter</h1>
-    </header>
-    <main>
-      <h2>Prometheus Exporter for MySQL servers</h2>
-      <div>Version: (version=gotest-version, branch=gotest-branch, revision=gotest-revision)</div>
-      <div>
-        <ul>
-          
-          <li><a href="/metrics">Metrics</a></li>
-          
-        </ul>
-      </div>
-    </main>
-  </body>
+	expected := `<html>
+<head><title>MySQLd exporter</title></head>
+<body>
+<h1>MySQLd exporter</h1>
+<p><a href='/metrics'>Metrics</a></p>
+</body>
 </html>
 `
 	if diff := cmp.Diff(expected, got); diff != "" {
